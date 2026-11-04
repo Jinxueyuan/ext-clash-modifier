@@ -64,14 +64,41 @@ export default {
       proxyName.push(proxyElem["name"]);
     });
 
+    // 按地区划分代理组，没有匹配节点的地区会被跳过
+    let regionGroupNames = [];
+    let regionGroups = [];
+    (template.regions || []).forEach((region) => {
+      let matched = proxyName.filter((name) =>
+        region.keywords.some((keyword) => name.includes(keyword))
+      );
+      if (matched.length === 0) {
+        return;
+      }
+      regionGroupNames.push(region.name);
+      regionGroups.push({
+        name: region.name,
+        type: "url-test",
+        url: "http://www.gstatic.com/generate_204",
+        interval: 86400,
+        proxies: matched,
+      });
+    });
+
     configObj["proxy-groups"].forEach((_, index) => {
       let groupElem = configObj["proxy-groups"][index];
 
       let i = groupElem["proxies"].indexOf("_PROXY_NAME");
       if (i !== -1) {
-        groupElem["proxies"].splice(index, 1, ...proxyName);
+        groupElem["proxies"].splice(i, 1, ...proxyName);
+      }
+
+      let j = groupElem["proxies"].indexOf("_REGION_GROUPS");
+      if (j !== -1) {
+        groupElem["proxies"].splice(j, 1, ...regionGroupNames);
       }
     });
+
+    configObj["proxy-groups"].push(...regionGroups);
 
     // replace rule provider proxy
     Object.keys(configObj["rule-providers"]).forEach(index => {

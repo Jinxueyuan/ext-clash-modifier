@@ -32,6 +32,21 @@ wrangler deploy
 
 默认的应该足够用了，如果需要进一步自定义，可以修改 `template.js` 和 `index.js`（逃
 
+### 按地区划分代理组
+
+`template.js` 里的 `regions` 定义地区分组，节点名称命中 `keywords` 中任意一个关键字即归入该组：
+
+```js
+const regions = [
+  { name: "美国节点", keywords: ["美国", "美國"] },
+  { name: "日本节点", keywords: ["日本"] },
+  { name: "新加坡节点", keywords: ["新加坡"] },
+  { name: "台湾节点", keywords: ["台湾", "臺灣"] },
+];
+```
+
+每个地区组是 `url-test`（自动选择该地区内最快的可用节点），组名会替换模板里的 `_REGION_GROUPS` 占位符，出现在 `🌏 地区选择` 中。没有匹配节点的地区会自动跳过；没匹配到任何关键字的节点不会被丢弃，仍可在 `🔰 选择节点` 里找到。要增删地区或调整关键字，改 `regions` 即可。
+
 ## 使用
 
 ```

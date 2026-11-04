@@ -1,8 +1,18 @@
 // 指定需要在原有配置文件上删除的字段
 const remove = ["proxy-groups", "rules", "rule-providers"];
 
+// 按节点名称中的关键字划分地区代理组，顺序即客户端中的显示顺序
+// 命中任意 keyword 的节点归入该组；未匹配到任何关键字的节点不加入地区组
+const regions = [
+  { name: "美国节点", keywords: ["美国", "美國"] },
+  { name: "日本节点", keywords: ["日本"] },
+  { name: "新加坡节点", keywords: ["新加坡"] },
+  { name: "台湾节点", keywords: ["台湾", "臺灣"] },
+];
+
 // 指定需要需要追加的 YAML 配置，注意缩进
 // 在数组中，使用 `_PROXY_NAME` 指代所有的 Proxy Name
+// 在数组中，使用 `_REGION_GROUPS` 指代上面所有地区代理组的名称
 // 在 Rule Provider 中的 URL 中，使用 `_PROVIDER_PROXY|` 指代规则文件代理 URL
 const append = `
 proxy-groups:
@@ -11,9 +21,15 @@ proxy-groups:
     proxies:
       - 绕过大陆丨黑名单(GFWlist)
       - 绕过大陆丨白名单(Whitelist)
+      - 🌏 地区选择
   - name: 🔰 选择节点
     type: select
     proxies: [DIRECT, _PROXY_NAME]
+  - name: 🌏 地区选择
+    type: select
+    proxies:
+      - 🔰 选择节点
+      - _REGION_GROUPS
   - name: 🛑 广告拦截
     type: select
     proxies:
@@ -148,4 +164,4 @@ rule-providers:
 
 `;
 
-export default { remove, append };
+export default { remove, append, regions };
