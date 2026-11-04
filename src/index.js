@@ -3,6 +3,13 @@ import yaml from "js-yaml";
 import "./template.js";
 import template from "./template.js";
 
+// Many subscription endpoints only return a Clash YAML when the request comes
+// from a Clash client. Otherwise they return a base64 proxy list (or, like
+// /api/v1/client/subscribe, only a few placeholder nodes). Cloudflare Workers
+// lets us set User-Agent on a subrequest, so always ask for a Meta-compatible
+// config: the template below relies on rule-providers / RULE-SET anyway.
+const CLASH_UA = "clash-verge/v1.0.0";
+
 export default {
   async fetch(request) {
     let { pathname } = new URL(request.url);
@@ -22,9 +29,23 @@ export default {
 
     let configUrl = Base64.decode(pathname.slice(3));
 
-    let resp = await fetch(configUrl);
+    let resp = await fetch(configUrl, {
+      headers: { "User-Agent": CLASH_UA },
+    });
     let rawConfig = await resp.text();
-    let configObj = yaml.load(rawConfig);
+
+    let configObj;
+    try {
+      configObj = yaml.load(rawConfig);
+    } catch (_) {
+      // handled by the check below
+    }
+    if (!configObj || typeof configObj !== "object" || !Array.isArray(configObj["proxies"])) {
+      return new Response(`error: subscription did not return a Clash YAML config (status ${resp.status})`, {
+        status: 502,
+        headers: { "content-type": "text/plain" },
+      });
+    }
 
     // remove
     template.remove.forEach((key) => {
@@ -61,8 +82,18 @@ export default {
 
 
     let configStr = yaml.dump(configObj);
+    // The body was rewritten, so origin framing headers (content-length,
+    // content-encoding, ...) must not be copied over. Keep the subscription
+    // metadata that clients use to show used/total traffic and expiry.
+    let headers = new Headers({ "content-type": "text/yaml; charset=utf-8" });
+    ["subscription-userinfo", "profile-update-interval"].forEach((key) => {
+      let value = resp.headers.get(key);
+      if (value) {
+        headers.set(key, value);
+      }
+    });
     return new Response(configStr, {
-      headers: resp.headers,
+      headers,
     });
   },
 };

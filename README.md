@@ -38,6 +38,16 @@ wrangler deploy
 https://<your-domain>/m/<base64-config-url>
 ```
 
+把订阅链接整体做 Base64 编码（不要带换行）后拼在 `/m/` 后面，带 `?token=...` 等参数的链接也可以直接用：
+
+```
+printf '%s' 'https://example.com/api/v1/client/subscribe?token=xxx' | base64 -w0
+```
+
+如果结果里带有 `/` 或 `+`，可改用 URL-safe Base64（把 `+` 换成 `-`、`/` 换成 `_`，并去掉末尾 `=`），`js-base64` 两种格式都能解码。
+
+Worker 会以 Clash 客户端的 User-Agent 去拉取订阅，因此那些只在识别到 Clash 客户端时才返回 YAML 的订阅接口（例如 `/api/v1/client/subscribe`）同样可用；响应中的 `subscription-userinfo` 会透传给客户端，用于显示已用流量、总流量和到期时间。若订阅返回的不是 Clash YAML，会返回 502 并提示原因。
+
 ## 注意事项
 
 `workers.dev` 已被墙，请使用自有域名。
