@@ -1,3 +1,9 @@
 name = "ext-clash-modifier"
 main = "src/index.js"
 compatibility_date = "2022-08-16"
+
+# 全新 clone 后没有 node_modules，Wrangler 打包会报
+# Could not resolve "js-base64" / "js-yaml" / "js-ini"。
+# 在 wrangler dev / deploy 打包前自动安装依赖。
+[build]
+command = "npm install --no-audit --no-fund"

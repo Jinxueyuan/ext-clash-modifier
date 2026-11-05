@@ -21,10 +21,14 @@ npm i -g wrangler
 2. Clone 这个项目，然后在 Repo 中执行
 
 ```
-npm i
+npm ci
 wrangler login
 wrangler deploy
 ```
+
+> 依赖 `js-base64` / `js-yaml` / `js-ini` 必须先安装到仓库目录，否则 Wrangler 打包时会报 `Could not resolve "js-base64"` 等 3 个错误。`wrangler.toml` 里的 `[build] command` 会在 `wrangler dev` / `wrangler deploy` 打包前自动补做 `npm install`，因此全新 clone 直接部署也可以。
+>
+> 使用 wrangler 2.x（本仓库 `devDependencies` 里的版本）时命令是 `wrangler publish`；`wrangler deploy` 需要 wrangler 3+。
 
 3. 绑定你的域名 (。・∀・)ノ
 
