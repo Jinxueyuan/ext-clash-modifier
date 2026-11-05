@@ -30,22 +30,43 @@ wrangler deploy
 
 ## 自定义 `template.js`
 
-默认的应该足够用了，如果需要进一步自定义，可以修改 `template.js` 和 `index.js`（逃
+策略写在 `template.js` 的 `defaultIniConfig` 里，采用类似 Clash for Windows Parser 的 INI 格式：一行一条规则、一行一个代理组，改起来比手写 YAML 直观得多。设计参考 [CHENXCHEN/ext-clash-modifier](https://github.com/CHENXCHEN/ext-clash-modifier)。
 
-### 按地区划分代理组
+### 规则 `ruleset=`
 
-`template.js` 里的 `regions` 定义地区分组，节点名称命中 `keywords` 中任意一个关键字即归入该组：
-
-```js
-const regions = [
-  { name: "美国节点", keywords: ["美国", "美國"] },
-  { name: "日本节点", keywords: ["日本"] },
-  { name: "新加坡节点", keywords: ["新加坡"] },
-  { name: "台湾节点", keywords: ["台湾", "臺灣"] },
-];
+```
+ruleset=<代理组名>,clash-{classical|domain|ipcidr}:<规则文件 URL>[,<间隔秒>]
+ruleset=<代理组名>,[]GEOIP,<地区>
+ruleset=<代理组名>,[]FINAL
 ```
 
-每个地区组是 `url-test`（自动选择该地区内最快的可用节点），组名会替换模板里的 `_REGION_GROUPS` 占位符，出现在 `🌏 地区选择` 中。没有匹配节点的地区会自动跳过；没匹配到任何关键字的节点不会被丢弃，仍可在 `🔰 选择节点` 里找到。要增删地区或调整关键字，改 `regions` 即可。
+- `clash-*` 会同时生成 `rule-providers` 项和 `RULE-SET` 规则；URL 中可用 `${provider_proxy}`、`${clash_rule}` 变量。默认 `provider_proxy` 指向本 Worker 的 `/p/` 反代，`clash_rule` 为空。
+- `[]GEOIP` 生成 `GEOIP` 规则，`[]FINAL` 生成 `MATCH` 规则。
+
+### 代理组 `custom_proxy_group=`
+
+```
+custom_proxy_group=<组名>`select`<参数>`<参数>...
+custom_proxy_group=<组名>`url-test`<节点正则>`<测试 URL>`<间隔>,<超时>,<容差>
+```
+
+用反引号分隔。`[]文本` 直接引用代理名或代理组名；不带 `[]` 的参数按**正则表达式**从节点名称中筛选，`.*` 表示全部节点。按地区分组就是一条正则的事：
+
+```
+custom_proxy_group=🌏 地区选择`select`[]🔧 手动切换`[]美国节点`[]日本节点
+custom_proxy_group=美国节点`url-test`美国.*`http://www.gstatic.com/generate_204`300,5000,50
+custom_proxy_group=日本节点`url-test`日本.*`http://www.gstatic.com/generate_204`300,5000,50
+```
+
+没有匹配到节点的组会自动跳过，指向它的引用也会被清理。默认配置已包含美国 / 日本 / 新加坡 / 台湾分组和 `🌏 地区选择` 选择器。
+
+### 变量与外部配置
+
+INI 里可加 `[var]` 覆盖 `provider_proxy` / `clash_rule`。也可以把整份 INI 放到公网，用 `?custom=<base64(INI_URL)>` 覆盖默认配置（拉取时会附加时间戳避免缓存）：
+
+```
+https://<your-domain>/m/<base64-config-url>?custom=<base64-ini-url>
+```
 
 ## 使用
 
