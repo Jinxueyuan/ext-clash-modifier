@@ -41,11 +41,21 @@ wrangler deploy
 ```
 ruleset=<代理组名>,clash-{classical|domain|ipcidr}:<规则文件 URL>[,<间隔秒>]
 ruleset=<代理组名>,[]GEOIP,<地区>
+ruleset=<代理组名>,[]GEOSITE,<分类>
 ruleset=<代理组名>,[]FINAL
 ```
 
 - `clash-*` 会同时生成 `rule-providers` 项和 `RULE-SET` 规则；URL 中可用 `${provider_proxy}`、`${clash_rule}` 变量。默认 `provider_proxy` 指向本 Worker 的 `/p/` 反代，`clash_rule` 为空。
-- `[]GEOIP` 生成 `GEOIP` 规则，`[]FINAL` 生成 `MATCH` 规则。
+- `[]GEOIP` 生成 `GEOIP` 规则，`[]GEOSITE` 生成 `GEOSITE` 规则，`[]FINAL` 生成 `MATCH` 规则。
+
+例如把常见大站交给节点、把国内站点直连：
+
+```
+ruleset=🚀 节点选择,[]GEOSITE,geolocation-!cn
+ruleset=🎯 全球直连,[]GEOSITE,cn
+```
+
+> `GEOSITE` 是 Clash.Meta（Clash Verge Rev / Mihomo / Clash for Android Meta）内核才支持的规则类型，原版 Clash Premium 不认识，会报错或忽略。默认配置里没有放 `GEOSITE` 规则，需要时自己加即可。
 
 ### 代理组 `custom_proxy_group=`
 

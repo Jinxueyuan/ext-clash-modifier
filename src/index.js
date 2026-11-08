@@ -91,6 +91,8 @@ function parseRules(customObj, proxyNames, vars) {
       rules.push(`RULE-SET,${name},${groupName}`);
     } else if (split[1] === '[]GEOIP' && split[2]) {
       rules.push(`GEOIP,${split[2]},${groupName}`);
+    } else if (split[1] === '[]GEOSITE' && split[2]) {
+      rules.push(`GEOSITE,${split[2]},${groupName}`);
     } else if (split[1] === '[]FINAL') {
       rules.push(`MATCH,${groupName}`);
     }

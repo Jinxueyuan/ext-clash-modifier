@@ -7,6 +7,7 @@ const remove = ['proxy-groups', 'rules', 'rule-providers'];
 //   clash-{classical|domain|ipcidr}:<URL>  自动生成 rule-provider 与 RULE-SET 规则
 //                                          第三段可写更新间隔（秒，默认 86400）
 //   []GEOIP,<地区>                         生成 GEOIP 规则
+//   []GEOSITE,<分类>                       生成 GEOSITE 规则（需 Clash.Meta 内核）
 //   []FINAL                               生成 MATCH 规则
 //   URL 里可用 ${provider_proxy} / ${clash_rule} 变量
 // [custom] custom_proxy_group=<组名>`<select|url-test>`<参数...>
