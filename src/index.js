@@ -175,6 +175,13 @@ export default {
       if (key in configObj) delete configObj[key];
     });
 
+    // 上游会在 dns.nameserver-policy 里引用 rule-set:cn / private / proxy，
+    // 上游的 rule-providers 已被删掉，这些引用会让 Mihomo 因找不到 rule-set
+    // 而拒绝加载整份配置；其中 cn / private 两条与默认 nameserver 完全相同。
+    if (configObj.dns && typeof configObj.dns === 'object') {
+      delete configObj.dns['nameserver-policy'];
+    }
+
     let proxyNames = configObj['proxies'].map((p) => p['name']);
     Object.assign(configObj, parseRules(customObj, proxyNames, vars));
 
