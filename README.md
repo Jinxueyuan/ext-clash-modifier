@@ -83,22 +83,24 @@ custom_proxy_group=🏠 家宽节点`url-test`@residential`http://www.gstatic.co
 custom_proxy_group=🏢 机房节点`url-test`@datacenter`http://www.gstatic.com/generate_204`300,5000,50
 ```
 
-默认配置已经带上这两个组，并挂在 `🚀 节点选择` 下面。生成配置时，Worker 会拿每个节点的 `server` 去查 [ip-api.com](http://ip-api.com) 的 `hosting` 字段：`true` 归为机房，`false` 归为家宽。ip-api 连续没有响应时整轮退到 [ipinfo.io](https://ipinfo.io)，用 ASN / PTR 里的关键词判断（ipinfo 只认 IP，会先用 DoH 把域名解析成 IP，所以兜底一条节点要两次请求）。INI 里没有 `@` 参数时不会发任何查询。
+默认配置已经带上这两个组，并挂在 `🚀 节点选择` 下面。生成配置时，Worker 先用 DoH 把每个节点的 `server`（常是随机子域名）解析成 IP，再拿 IP 查 [ipwho.is](https://ipwho.is) 的 `isp` / `org` / `domain` / `asn`，按关键词判断家宽（如 HiNet / 中华电信 / `dynamic-ip`）还是机房（如 Akamai / DigitalOcean / Cloud）。ipwho.is 连续识别不出时才退到 [ipinfo.io](https://ipinfo.io)（免费版在 Workers 共享出口可能被限流）。INI 里没有 `@` 参数时不会发任何查询。
 
-识别结果按主机名写进 Worker 的 Cache API（机房/家宽存 7 天，没查到的只存 1 小时），命中缓存不占查询次数。查询次数由 `[var] ip_lookup_limit` 控制，默认 45：
+> 早期版本用 ip-api.com 的 `hosting` 字段作主接口，但它的免费 HTTP 端点现在直接返回 `status:fail`，已改用 ipwho.is。
+
+识别结果按 IP 写进 Worker 的 Cache API（机房/家宽存 7 天，没查到的只存 1 小时），域名→IP 的解析结果也缓存 1 小时；命中缓存不占查询次数。查询次数由 `[var] ip_lookup_limit` 控制，默认 45：
 
 ```
 [var]
 ip_lookup_limit=45
 ```
 
-节点比这个数多时，一次生成只补一部分，多刷新几次订阅就会补齐（拿到的结果会一直复用）。Workers 免费版单请求上限 50 个子请求，付费版可以把这个值调大。
+节点比这个数多时，一次生成只补一部分，多刷新几次订阅就会补齐（DoH 解析和识别结果都会缓存复用）。每条新节点通常要一次 DoH + 一次情报查询，所以 45 次预算大约覆盖 20 多个节点。Workers 免费版单请求上限 50 个子请求，付费版可以把这个值调大。
 
 几点限制：
 
 - 判定的是节点**入口服务器**的 IP。走中转或 CDN 的节点看到的是中转地址，可能和真实出口不一致。
-- ip-api 免费接口限 45 次/分钟且只有 http。被限流时那一批会走 ipinfo 兜底，ipinfo 认不出来的节点这次不进组，仍留在 `♻️ 自动选择` / `🔧 手动切换` 里。
-- 查询会把节点服务器域名发给第三方。介意的话删掉这两行，或换回按节点名正则分组。
+- ipwho.is / ipinfo.io 都靠关键词猜，识别不出来的节点这次不进组，仍留在 `♻️ 自动选择` / `🔧 手动切换` 里，下次刷新会用缓存继续补齐。
+- 查询会把节点服务器 IP 发给第三方。介意的话删掉这两行，或换回按节点名正则分组。
 
 ### 变量与外部配置
 

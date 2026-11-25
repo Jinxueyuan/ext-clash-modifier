@@ -13,10 +13,10 @@ const remove = ['proxy-groups', 'rules', 'rule-providers'];
 // [custom] custom_proxy_group=<组名>`<select|url-test>`<参数...>
 //   []文本      直接引用代理名 / 代理组名
 //   正则表达式   按节点名称筛选，如 美国.* ；.* 表示全部节点
-//   @residential / @datacenter  按线路类型筛选：识别节点入口 IP 是
-//                家庭宽带还是机房（ip-api.com 的 hosting 字段，
-//                失败时退到 ipinfo.io；结果缓存 7 天，命中缓存不
-//                占查询次数。识别不出来的节点不会进这两个组）
+//   @residential / @datacenter  按线路类型筛选：先 DoH 把 server 解析成 IP，
+//                再用 ipwho.is 的 isp/org/domain 关键词判断家宽还是机房
+//                （失败退到 ipinfo.io；结果缓存 7 天，命中缓存不占查询次数。
+//                识别不出来的节点不会进这两个组）
 //   url-test 第 4 段为 <间隔>,<超时>,<容差>，如 300,5000,50
 // [var] 可覆盖 provider_proxy / clash_rule / ip_lookup_limit 等变量
 //   ip_lookup_limit  每次生成配置最多发出的查询数（默认 45，免费版
