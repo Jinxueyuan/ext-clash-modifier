@@ -13,8 +13,14 @@ const remove = ['proxy-groups', 'rules', 'rule-providers'];
 // [custom] custom_proxy_group=<组名>`<select|url-test>`<参数...>
 //   []文本      直接引用代理名 / 代理组名
 //   正则表达式   按节点名称筛选，如 美国.* ；.* 表示全部节点
+//   @residential / @datacenter  按线路类型筛选：识别节点入口 IP 是
+//                家庭宽带还是机房（ip-api.com 的 hosting 字段，
+//                失败时退到 ipinfo.io；结果缓存 7 天，命中缓存不
+//                占查询次数。识别不出来的节点不会进这两个组）
 //   url-test 第 4 段为 <间隔>,<超时>,<容差>，如 300,5000,50
-// [var] 可覆盖 provider_proxy / clash_rule 等变量
+// [var] 可覆盖 provider_proxy / clash_rule / ip_lookup_limit 等变量
+//   ip_lookup_limit  每次生成配置最多发出的查询数（默认 45，免费版
+//                    单请求上限 50 个子请求；节点多时多次刷新会补齐）
 //
 // 也可把 INI 放到公网，用 ?custom=<base64(INI_URL)> 覆盖这里的默认配置。
 const defaultIniConfig = [
@@ -36,9 +42,11 @@ const defaultIniConfig = [
   'ruleset=🎯 全球直连,[]GEOIP,LAN',
   'ruleset=🎯 全球直连,[]GEOIP,CN',
   'ruleset=🐟 漏网之鱼,[]FINAL',
-  'custom_proxy_group=🚀 节点选择`select`[]♻️ 自动选择`[]🔧 手动切换`[]🌏 地区选择`[]DIRECT',
+  'custom_proxy_group=🚀 节点选择`select`[]♻️ 自动选择`[]🔧 手动切换`[]🏠 家宽节点`[]🏢 机房节点`[]🌏 地区选择`[]DIRECT',
   'custom_proxy_group=♻️ 自动选择`url-test`.*`http://www.gstatic.com/generate_204`300,5000,50',
   'custom_proxy_group=🔧 手动切换`select`.*',
+  'custom_proxy_group=🏠 家宽节点`url-test`@residential`http://www.gstatic.com/generate_204`300,5000,50',
+  'custom_proxy_group=🏢 机房节点`url-test`@datacenter`http://www.gstatic.com/generate_204`300,5000,50',
   'custom_proxy_group=🎯 全球直连`select`[]DIRECT`[]🚀 节点选择`[]♻️ 自动选择`[]🔧 手动切换`[]REJECT',
   'custom_proxy_group=🛑 广告拦截`select`[]REJECT`[]🚀 节点选择`[]♻️ 自动选择`[]🔧 手动切换`[]DIRECT',
   'custom_proxy_group=🐟 漏网之鱼`select`[]DIRECT`[]🚀 节点选择`[]♻️ 自动选择`[]🔧 手动切换',

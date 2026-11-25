@@ -74,6 +74,32 @@ custom_proxy_group=日本节点`url-test`日本.*`http://www.gstatic.com/generat
 
 没有匹配到节点的组会自动跳过，指向它的引用也会被清理。默认配置已包含美国 / 日本 / 新加坡 / 台湾分组和 `🌏 地区选择` 选择器。
 
+### 按线路类型分组（家宽 / 机房）
+
+除了正则，还可以用 `@residential` / `@datacenter` 按**节点服务器的 IP 类型**筛选，而不是看节点名字：
+
+```
+custom_proxy_group=🏠 家宽节点`url-test`@residential`http://www.gstatic.com/generate_204`300,5000,50
+custom_proxy_group=🏢 机房节点`url-test`@datacenter`http://www.gstatic.com/generate_204`300,5000,50
+```
+
+默认配置已经带上这两个组，并挂在 `🚀 节点选择` 下面。生成配置时，Worker 会拿每个节点的 `server` 去查 [ip-api.com](http://ip-api.com) 的 `hosting` 字段：`true` 归为机房，`false` 归为家宽。ip-api 连续没有响应时整轮退到 [ipinfo.io](https://ipinfo.io)，用 ASN / PTR 里的关键词判断（ipinfo 只认 IP，会先用 DoH 把域名解析成 IP，所以兜底一条节点要两次请求）。INI 里没有 `@` 参数时不会发任何查询。
+
+识别结果按主机名写进 Worker 的 Cache API（机房/家宽存 7 天，没查到的只存 1 小时），命中缓存不占查询次数。查询次数由 `[var] ip_lookup_limit` 控制，默认 45：
+
+```
+[var]
+ip_lookup_limit=45
+```
+
+节点比这个数多时，一次生成只补一部分，多刷新几次订阅就会补齐（拿到的结果会一直复用）。Workers 免费版单请求上限 50 个子请求，付费版可以把这个值调大。
+
+几点限制：
+
+- 判定的是节点**入口服务器**的 IP。走中转或 CDN 的节点看到的是中转地址，可能和真实出口不一致。
+- ip-api 免费接口限 45 次/分钟且只有 http。被限流时那一批会走 ipinfo 兜底，ipinfo 认不出来的节点这次不进组，仍留在 `♻️ 自动选择` / `🔧 手动切换` 里。
+- 查询会把节点服务器域名发给第三方。介意的话删掉这两行，或换回按节点名正则分组。
+
 ### 变量与外部配置
 
 INI 里可加 `[var]` 覆盖 `provider_proxy` / `clash_rule`。也可以把整份 INI 放到公网，用 `?custom=<base64(INI_URL)>` 覆盖默认配置（拉取时会附加时间戳避免缓存）：
