@@ -67,9 +67,9 @@ custom_proxy_group=<组名>`url-test`<节点正则>`<测试 URL>`<间隔>,<超�
 用反引号分隔。`[]文本` 直接引用代理名或代理组名；不带 `[]` 的参数按**正则表达式**从节点名称中筛选，`.*` 表示全部节点。按地区分组就是一条正则的事：
 
 ```
-custom_proxy_group=🌏 地区选择`select`[]🔧 手动切换`[]美国节点`[]日本节点
-custom_proxy_group=美国节点`url-test`美国.*`http://www.gstatic.com/generate_204`300,5000,50
-custom_proxy_group=日本节点`url-test`日本.*`http://www.gstatic.com/generate_204`300,5000,50
+custom_proxy_group=🌏 地区选择`select`[]🔧 手动切换`[]🇺🇸 美国节点`[]🇯🇵 日本节点
+custom_proxy_group=🇺🇸 美国节点`url-test`美国.*`http://www.gstatic.com/generate_204`300,5000,50
+custom_proxy_group=🇯🇵 日本节点`url-test`日本.*`http://www.gstatic.com/generate_204`300,5000,50
 ```
 
 没有匹配到节点的组会自动跳过，指向它的引用也会被清理。默认配置已包含美国 / 日本 / 新加坡 / 台湾分组和 `🌏 地区选择` 选择器。

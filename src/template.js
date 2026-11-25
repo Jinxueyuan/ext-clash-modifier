@@ -50,11 +50,11 @@ const defaultIniConfig = [
   'custom_proxy_group=🎯 全球直连`select`[]DIRECT`[]🚀 节点选择`[]♻️ 自动选择`[]🔧 手动切换`[]REJECT',
   'custom_proxy_group=🛑 广告拦截`select`[]REJECT`[]🚀 节点选择`[]♻️ 自动选择`[]🔧 手动切换`[]DIRECT',
   'custom_proxy_group=🐟 漏网之鱼`select`[]DIRECT`[]🚀 节点选择`[]♻️ 自动选择`[]🔧 手动切换',
-  'custom_proxy_group=🌏 地区选择`select`[]🔧 手动切换`[]美国节点`[]日本节点`[]新加坡节点`[]台湾节点',
-  'custom_proxy_group=美国节点`url-test`美国.*`http://www.gstatic.com/generate_204`300,5000,50',
-  'custom_proxy_group=日本节点`url-test`日本.*`http://www.gstatic.com/generate_204`300,5000,50',
-  'custom_proxy_group=新加坡节点`url-test`新加坡.*`http://www.gstatic.com/generate_204`300,5000,50',
-  'custom_proxy_group=台湾节点`url-test`(台湾|台灣|臺灣|臺湾).*`http://www.gstatic.com/generate_204`300,5000,50',
+  'custom_proxy_group=🌏 地区选择`select`[]🔧 手动切换`[]🇺🇸 美国节点`[]🇯🇵 日本节点`[]🇸🇬 新加坡节点`[]🇹🇼 台湾节点',
+  'custom_proxy_group=🇺🇸 美国节点`url-test`美国.*`http://www.gstatic.com/generate_204`300,5000,50',
+  'custom_proxy_group=🇯🇵 日本节点`url-test`日本.*`http://www.gstatic.com/generate_204`300,5000,50',
+  'custom_proxy_group=🇸🇬 新加坡节点`url-test`新加坡.*`http://www.gstatic.com/generate_204`300,5000,50',
+  'custom_proxy_group=🇹🇼 台湾节点`url-test`(台湾|台灣|臺灣|臺湾).*`http://www.gstatic.com/generate_204`300,5000,50',
 ].join('\n');
 
 export default { remove, defaultIniConfig };
