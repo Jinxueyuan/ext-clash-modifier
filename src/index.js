@@ -11,19 +11,27 @@ const CLASH_RULE = 'https://raw.githubusercontent.com/Loyalsoldier/clash-rules/r
 
 // 线路类型识别：判断节点入口 IP 是家宽还是机房。
 // 节点的 server 多是随机子域名，要先用 DoH 解析成 IP，再拿 IP 查情报库。
-// 主接口 ipwho.is：免费、无限流、支持 https，按 IP 返回 isp/org/asn/domain，
-// 判定最准。失败时退到 ipinfo.io（免费版在 Workers 共享出口可能被限流）。
-// 结果按「主机名 → IP」和「IP → 类型」两级缓存，命中缓存不占查询次数；
-// 节点多的订阅一次查不完，多刷新几次就会补齐。
+//
+// 注意：Workers 免费版每个请求只有 50 个子请求，而 Cache API 的 match / put
+// 也算子请求。所以整张识别结果表只存一个缓存项（一次读 + 一次写），不能按节点
+// 分别缓存，否则光读缓存就能把额度用光，节点越多的订阅反而进组越少。
+// 识别结果按主机名存一条记录（IP + 类型）：已经识别过的节点之后每次刷新都能全部
+// 进组，新节点每次刷新补一部分，多刷几次就补齐。
+// Cache API 是按机房隔离的，绑定了 KV（IP_TYPE_KV）就优先用 KV，让所有机房共享
+// 同一份结果；没绑就退回 Cache API，新机房仍需要重新补齐几次。
 const IPINFO_API = 'https://ipinfo.io/';
 const IPWHOIS_API = 'https://ipwho.is/';
 const IP_CACHE_PATH = '/__ip-type__/';
-const IP_CACHE_TTL = 7 * 24 * 60 * 60;
-const IP_MISS_CACHE_TTL = 60 * 60; // 没查到的只记一会儿，下次刷新再试
-const IP_REQUEST_LIMIT = 45; // Workers 免费版每个请求 50 个子请求，留几个余量
+const IP_CACHE_KEY = 'v3';
+const KV_PREFIX = 'v1:';
+const HOST_IP_TTL = 24 * 60 * 60; // 主机名 → IP 记一天，免得每小时重复 DoH
+const IP_CACHE_TTL = 7 * 24 * 60 * 60; // 家宽 / 机房结果记 7 天
+const IP_KEEP_TTL = 30 * 24 * 60 * 60; // KV 里已知类型多留一阵，过了 7 天校验期还能兜底
+const IP_MISS_CACHE_TTL = 60 * 60; // 没识别出来的只记一会儿，下次刷新再试
+const IP_REQUEST_LIMIT = 45; // 分类阶段所有子请求（fetch + Cache API）的总预算
 const IP_CONCURRENCY = 5;
 const IP_BUDGET_MS = 12000; // 超时就停，剩下的节点留给下次刷新
-const IP_WHOIS_FAIL_LIMIT = 5; // ipwho 连续查不到就退到 ipinfo
+const IP_WHOIS_FAIL_LIMIT = 5; // ipwho 连续请求失败就退到 ipinfo
 const IPINFO_FAIL_LIMIT = 5; // ipinfo 连续失败（被限流）就别再浪费请求
 const DATACENTER_HINT =
   /cloud|amazon|aws|google|microsoft|azure|oracle|digitalocean|linode|akamai|vultr|hetzner|ovh|contabo|leaseweb|choopa|m247|alibaba|aliyun|tencent|hosting|datacenter|data ?center|idc|vps|server|colo|dedicated|cloudflare|linodeusercontent|digitaloceanspaces/i;
@@ -76,51 +84,100 @@ function needsIpClassify(customObj) {
     .some((line) => /@(residential|datacenter)(`|$)/.test(String(line)));
 }
 
-// 缓存键走本域名的路径：Workers 的 Cache API 不能跨 zone 写。
-// 两类缓存：ip= 域名解析出的 IP，type= IP 对应的线路类型。
-function ipCacheRequest(key, origin) {
-  return new Request(`${origin}${IP_CACHE_PATH}${encodeURIComponent(key)}`);
+// 每发一个 fetch / 调一次 Cache API 之前先 take 一次，保证不会撞上
+// 「Too many subrequests」——撞上时后续请求全部失败，识别会直接停在半截。
+function take(budget) {
+  if (budget.left <= 0) return false;
+  budget.left--;
+  return true;
 }
 
-async function readCache(key, origin) {
-  if (typeof caches === 'undefined') return '';
-  try {
-    let hit = await caches.default.match(ipCacheRequest(key, origin));
-    return hit ? await hit.text() : '';
-  } catch (_) {
-    return '';
+function ipCacheRequest(origin) {
+  return new Request(`${origin}${IP_CACHE_PATH}${IP_CACHE_KEY}`);
+}
+
+// 一条记录：{ ip, type, at }，type 为空表示只解析到了 IP 还没查到类型。
+function recordTtl(rec) {
+  if (rec.type) return rec.type === 'unknown' ? IP_MISS_CACHE_TTL : IP_CACHE_TTL;
+  return HOST_IP_TTL;
+}
+
+// 已识别过的类型算「可长期复用」：过了校验期也先沿用，避免整组消失
+function isKnown(rec) {
+  return !!rec && (rec.type === 'residential' || rec.type === 'datacenter');
+}
+
+function recordFresh(rec, now) {
+  return !!rec && typeof rec.ip === 'string' && now - rec.at < recordTtl(rec);
+}
+
+async function loadRecords(hosts, env, origin, budget) {
+  let records = new Map();
+  let kv = env && env.IP_TYPE_KV;
+  if (kv) {
+    // KV 操作不占子请求额度，按主机名逐个读，写入时也就不会互相覆盖
+    await Promise.all(hosts.map(async (host) => {
+      try {
+        let rec = await kv.get(`${KV_PREFIX}${host}`, 'json');
+        if (rec && typeof rec === 'object') records.set(host, rec);
+      } catch (_) {}
+    }));
+    return records;
   }
+  // 没有 KV 时退回 Cache API：整表存一项，只花一次读 + 一次写
+  if (typeof caches === 'undefined' || !take(budget)) return records;
+  try {
+    let hit = await caches.default.match(ipCacheRequest(origin));
+    if (!hit) return records;
+    let data = JSON.parse(await hit.text());
+    Object.keys(data || {}).forEach((host) => {
+      if (data[host] && typeof data[host] === 'object') records.set(host, data[host]);
+    });
+  } catch (_) {}
+  return records;
 }
 
-async function writeCache(key, origin, value, ttl) {
+async function saveRecords(records, dirty, env, origin, now) {
+  if (!dirty.size) return;
+  let kv = env && env.IP_TYPE_KV;
+  if (kv) {
+    await Promise.all([...dirty].map((host) => {
+      let rec = records.get(host);
+      if (!rec) return null;
+      return kv.put(`${KV_PREFIX}${host}`, JSON.stringify(rec), {
+        // 已知类型在 KV 里多留 30 天，过了 7 天校验期还能继续兜底
+        expirationTtl: isKnown(rec) ? IP_KEEP_TTL : recordTtl(rec),
+      }).catch(() => {});
+    }));
+    return;
+  }
   if (typeof caches === 'undefined') return;
+  let body = {};
+  records.forEach((rec, host) => {
+    if (isKnown(rec) || recordFresh(rec, now)) body[host] = rec;
+  });
   try {
-    await caches.default.put(ipCacheRequest(key, origin), new Response(value, {
-      headers: { 'content-type': 'text/plain', 'cache-control': `max-age=${ttl}` },
+    await caches.default.put(ipCacheRequest(origin), new Response(JSON.stringify(body), {
+      headers: { 'content-type': 'application/json', 'cache-control': `max-age=${IP_KEEP_TTL}` },
     }));
   } catch (_) {}
 }
 
-function readCachedType(ip, origin) {
-  return readCache(`type:${ip}`, origin);
-}
-
-function writeCachedType(ip, origin, type) {
-  let ttl = type === 'unknown' ? IP_MISS_CACHE_TTL : IP_CACHE_TTL;
-  return writeCache(`type:${ip}`, origin, type, ttl);
-}
-
-async function fetchJson(url, headers) {
+async function fetchJson(url, accept, budget) {
   let controller = new AbortController();
   let timer = setTimeout(() => controller.abort(), 3000);
   try {
     let resp = await fetch(url, {
       signal: controller.signal,
-      headers: headers ? { accept: headers } : undefined,
+      headers: accept ? { accept } : undefined,
     });
     if (!resp.ok) return null;
     return await resp.json();
-  } catch (_) {
+  } catch (e) {
+    // 真撞上子请求上限就把预算清零，剩下的节点留到下次刷新再查
+    if (budget && /Too many subrequests/i.test(String((e && e.message) || e))) {
+      budget.left = 0;
+    }
     return null;
   } finally {
     clearTimeout(timer);
@@ -131,26 +188,20 @@ function isIpLiteral(host) {
   return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':');
 }
 
-// DoH JSON 接口，用来把节点域名解析成 IP（ipinfo 只认 IP）
+// DoH JSON 接口，用来把节点域名解析成 IP
 const DOH_APIS = [
   'https://dns.alidns.com/resolve',
   'https://cloudflare-dns.com/dns-query',
 ];
 
-async function dohResolve(host, budget, origin) {
-  // 域名解析结果也缓存，刷新时不用重复 DoH。随机子域名 TTL 很短，缓存 1 小时即可。
-  let cached = await readCache(`ip:${host}`, origin);
-  if (cached) return cached;
+async function resolveHost(host, budget) {
+  if (isIpLiteral(host)) return host;
   for (let api of DOH_APIS) {
-    if (budget.left <= 0) return '';
-    budget.left--;
-    let data = await fetchJson(`${api}?name=${encodeURIComponent(host)}&type=A`, 'application/dns-json');
+    if (!take(budget)) return '';
+    let data = await fetchJson(`${api}?name=${encodeURIComponent(host)}&type=A`, 'application/dns-json', budget);
     let answer = data && Array.isArray(data.Answer) ? data.Answer : [];
     for (let record of answer) {
-      if (record.type === 1 && record.data) {
-        await writeCache(`ip:${host}`, origin, record.data, IP_MISS_CACHE_TTL);
-        return record.data;
-      }
+      if (record.type === 1 && record.data) return record.data;
     }
   }
   return '';
@@ -163,78 +214,100 @@ function typeFromDesc(desc) {
   return '';
 }
 
-// 主接口 ipwho.is：按 IP 查，返回 isp/org/asn/domain，免费无限流
-async function ipwhoisType(ip) {
-  let data = await fetchJson(`${IPWHOIS_API}${encodeURIComponent(ip)}`);
-  if (!data || data.success === false) return '';
+// 主接口 ipwho.is：按 IP 查，返回 isp / org / asn / domain。
+// 返回 null 表示请求失败（下次还要重试），'' 表示查到了但判断不出来。
+async function ipwhoisType(ip, budget) {
+  let data = await fetchJson(`${IPWHOIS_API}${encodeURIComponent(ip)}`, null, budget);
+  if (!data) return null;
+  if (data.success === false) return '';
   let conn = data.connection || {};
   let desc = `${conn.isp || ''} ${conn.org || ''} ${conn.domain || ''} ${conn.asn || ''}`;
   return typeFromDesc(desc);
 }
 
-// 兜底接口 ipinfo.io：免费版在 Workers 共享出口可能被限流，只有 org/hostname
-async function ipinfoType(ip) {
-  let data = await fetchJson(`${IPINFO_API}${encodeURIComponent(ip)}/json`);
-  if (!data || data.error) return '';
-  let desc = `${data.org || ''} ${data.hostname || ''}`;
-  return typeFromDesc(desc);
+// 兜底接口 ipinfo.io：免费版在 Workers 共享出口可能被限流，只有 org / hostname
+async function ipinfoType(ip, budget) {
+  let data = await fetchJson(`${IPINFO_API}${encodeURIComponent(ip)}/json`, null, budget);
+  if (!data) return null;
+  if (data.error) return '';
+  return typeFromDesc(`${data.org || ''} ${data.hostname || ''}`);
 }
 
-// 单个主机名 -> 'residential' | 'datacenter' | ''
-// 先按 IP 缓存查；没有 IP 就用 DoH 把域名解析成 IP（IP 字面量跳过），
-// 再按 IP 查缓存，最后依次问 ipwho.is / ipinfo.io。budget 按请求数扣。
-async function lookupHostType(host, budget, state, origin) {
-  let ip = isIpLiteral(host) ? host : await readCache(`ip:${host}`, origin);
-  if (!ip) ip = await dohResolve(host, budget, origin);
-  if (!ip) return '';
-
-  let type = await readCachedType(ip, origin);
-  if (type === 'unknown') return '';
-  if (type === 'residential' || type === 'datacenter') return type;
-
-  if (state.useIpWhois && budget.left > 0) {
-    budget.left--;
-    type = await ipwhoisType(ip);
-    if (!type && ++state.fails >= IP_WHOIS_FAIL_LIMIT) state.useIpWhois = false;
-    if (type) state.fails = 0;
-  }
-  if (!type && state.useIpinfo && budget.left > 0) {
-    budget.left--;
-    type = await ipinfoType(ip);
-    if (!type && ++state.infoFails >= IPINFO_FAIL_LIMIT) state.useIpinfo = false;
-    if (type) state.infoFails = 0;
+// 单个主机名 -> 'residential' | 'datacenter' | ''；结果写进 records，不算在返回值里。
+// 先看有没有新鲜记录，再 DoH 解析，最后查情报接口。budget 按子请求扣。
+async function lookupHostType(host, budget, state, records, dirty, now) {
+  let rec = records.get(host);
+  // 记录过期后仍保留上次判定，重新校验失败时用它兜底，
+  // 这样缓存到期那一刻组不会突然空掉。
+  let known = isKnown(rec) ? rec.type : '';
+  if (rec && recordFresh(rec, now)) {
+    if (rec.type === 'unknown') return '';
+    if (rec.type) return rec.type;
+  } else {
+    rec = null;
   }
 
-  await writeCachedType(ip, origin, type || 'unknown');
+  let ip = rec ? rec.ip : '';
+  if (!ip) {
+    ip = await resolveHost(host, budget);
+    if (!ip) return ''; // DoH 失败 / 预算用完：不写记录，下次再试
+    records.set(host, { ip, type: known, at: now });
+    dirty.add(host);
+  }
+
+  let type = null;
+  if (state.useIpWhois && take(budget)) {
+    type = await ipwhoisType(ip, budget);
+    if (type === null) {
+      if (++state.fails >= IP_WHOIS_FAIL_LIMIT) state.useIpWhois = false;
+    } else {
+      state.fails = 0;
+    }
+  }
+  if (type === null && state.useIpinfo && take(budget)) {
+    let alt = await ipinfoType(ip, budget);
+    if (alt) type = alt;
+    if (alt === null && ++state.infoFails >= IPINFO_FAIL_LIMIT) state.useIpinfo = false;
+    if (alt) state.infoFails = 0;
+  }
+  if (type === null) return ''; // 请求失败：不写 unknown，否则会把节点锁死一小时
+
+  records.set(host, { ip, type: type || 'unknown', at: now });
+  dirty.add(host);
   return type;
 }
 
 // 返回 Map<节点名, 'residential'|'datacenter'>；没识别出来的节点不在里面
-async function classifyProxies(proxies, origin, limit) {
+async function classifyProxies(proxies, env, origin, limit) {
   let hosts = [...new Set(
     proxies.map((p) => p && p.server).filter((s) => typeof s === 'string' && s)
   )];
   let budget = { left: limit };
   let state = { fails: 0, infoFails: 0, useIpWhois: true, useIpinfo: true };
+  let now = Math.floor(Date.now() / 1000);
+  let dirty = new Set();
+  let records = await loadRecords(hosts, env, origin, budget);
+  // Cache API 后端要在最后写回整表，先留一次子请求；KV 不计额度，不用留
+  if (!(env && env.IP_TYPE_KV) && budget.left > 0) budget.left--;
+
   let deadline = Date.now() + IP_BUDGET_MS;
   let next = 0;
-  let hostTypes = new Map(); // server 主机名 -> 类型
-
   let worker = async () => {
     while (next < hosts.length && budget.left > 0 && Date.now() < deadline) {
-      let host = hosts[next++];
-      let type = await lookupHostType(host, budget, state, origin);
-      if (type) hostTypes.set(host, type);
+      await lookupHostType(hosts[next++], budget, state, records, dirty, now);
     }
   };
   await Promise.all(
     Array.from({ length: Math.min(IP_CONCURRENCY, hosts.length) }, worker)
   );
+  await saveRecords(records, dirty, env, origin, now);
 
   let result = new Map();
   proxies.forEach((p) => {
-    let type = p && hostTypes.get(p.server);
-    if (type) result.set(p.name, type);
+    if (!p || !p.name || !p.server) return;
+    let rec = records.get(p.server);
+    // 已识别过的类型即使过了校验期也先沿用，等到预算允许时再重新校验
+    if (isKnown(rec)) result.set(p.name, rec.type);
   });
   return result;
 }
@@ -334,7 +407,7 @@ async function fetchSub(url) {
 }
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     let { pathname, searchParams } = new URL(request.url);
 
     if (pathname.startsWith('/p/')) {
@@ -390,7 +463,7 @@ export default {
     let classified = null;
     if (needsIpClassify(customObj)) {
       let limit = Math.min(Math.max(Number(vars.ip_lookup_limit) || IP_REQUEST_LIMIT, 1), 1000);
-      let types = await classifyProxies(configObj['proxies'], new URL(request.url).origin, limit);
+      let types = await classifyProxies(configObj['proxies'], env, new URL(request.url).origin, limit);
       classified = { residential: new Set(), datacenter: new Set() };
       types.forEach((type, name) => classified[type].add(name));
     }

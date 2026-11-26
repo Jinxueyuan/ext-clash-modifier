@@ -83,18 +83,37 @@ custom_proxy_group=🏠 家宽节点`url-test`@residential`http://www.gstatic.co
 custom_proxy_group=🏢 机房节点`url-test`@datacenter`http://www.gstatic.com/generate_204`300,5000,50
 ```
 
-默认配置已经带上这两个组，并挂在 `🚀 节点选择` 下面。生成配置时，Worker 先用 DoH 把每个节点的 `server`（常是随机子域名）解析成 IP，再拿 IP 查 [ipwho.is](https://ipwho.is) 的 `isp` / `org` / `domain` / `asn`，按关键词判断家宽（如 HiNet / 中华电信 / `dynamic-ip`）还是机房（如 Akamai / DigitalOcean / Cloud）。ipwho.is 连续识别不出时才退到 [ipinfo.io](https://ipinfo.io)（免费版在 Workers 共享出口可能被限流）。INI 里没有 `@` 参数时不会发任何查询。
+默认配置已经带上这两个组，并挂在 `🚀 节点选择` 下面。生成配置时，Worker 先用 DoH 把每个节点的 `server`（常是随机子域名）解析成 IP，再拿 IP 查 [ipwho.is](https://ipwho.is) 的 `isp` / `org` / `domain` / `asn`，按关键词判断家宽（如 HiNet / 中华电信 / `dynamic-ip`）还是机房（如 Akamai / DigitalOcean / Cloud）。ipwho.is 请求失败时才退到 [ipinfo.io](https://ipinfo.io)（免费版在 Workers 共享出口可能被限流）。INI 里没有 `@` 参数时不会发任何查询。
 
 > 早期版本用 ip-api.com 的 `hosting` 字段作主接口，但它的免费 HTTP 端点现在直接返回 `status:fail`，已改用 ipwho.is。
 
-识别结果按 IP 写进 Worker 的 Cache API（机房/家宽存 7 天，没查到的只存 1 小时），域名→IP 的解析结果也缓存 1 小时；命中缓存不占查询次数。查询次数由 `[var] ip_lookup_limit` 控制，默认 45：
+识别结果按主机名存一条记录：主机名→IP 记 1 天，线路类型记 7 天（没识别出来的记 1 小时）。**过了校验期不会立刻丢掉**：仍沿用上次的判定结果，等预算允许时再重新校验，所以缓存到期那一刻组不会突然空掉。没绑 KV 时这些记录整体存在 Cache API 的**一个**缓存项里；之所以不按节点分开存，是因为 Workers 的 **Cache API 调用（`match` / `put`）也占子请求额度**，按节点分开缓存时节点一多，光读缓存就会把 50 次额度用光，导致每次刷新只能认出很少几个节点，看着就像「家宽越刷越少、机房直接消失」。
+
+`ip_lookup_limit` 是识别阶段**所有子请求**（`fetch` + Cache API）的总预算，默认 45：
 
 ```
 [var]
 ip_lookup_limit=45
 ```
 
-节点比这个数多时，一次生成只补一部分，多刷新几次订阅就会补齐（DoH 解析和识别结果都会缓存复用）。每条新节点通常要一次 DoH + 一次情报查询，所以 45 次预算大约覆盖 20 多个节点。Workers 免费版单请求上限 50 个子请求，付费版可以把这个值调大。
+每条新节点大约要一次 DoH + 一次情报查询，所以一次刷新能补 20 个左右的新节点；80 个节点的订阅刷新三四次就补齐。补齐之后每次生成只花一次缓存读（有变化时再写一次），所有节点都会稳定进组，不会再越刷越少。写回缓存的那一次子请求会提前预留，额度用尽也不会丢掉这次的识别结果。
+
+Workers 免费版单请求上限 50 个子请求，默认值留了余量；付费版可以把这个值调大，一次就能补更多节点。
+
+### 跨机房共享识别结果（可选 KV）
+
+没绑 KV 时结果存在 Cache API 里，而 Cache API 是**按 Cloudflare 机房**隔离的：请求落到没预热过的机房，要重新刷三四次补齐。
+
+绑一个 KV 命名空间就能让所有机房共享同一份结果：
+
+```
+wrangler kv:namespace create IP_TYPE_KV
+wrangler kv:namespace create IP_TYPE_KV --preview
+```
+
+把两条命令输出的 id 分别填进 `wrangler.toml` 里的 `id` / `preview_id`（配置文件里已有注释好的模板），重新 deploy 即可。绑定后识别结果按主机名逐条写进 KV（KV 操作不占子请求额度），一个机房新识别出的节点，其他机房大约 60 秒后也能用上，不用再各自预热。KV 里已识别的记录保留 30 天，比 7 天的校验期长，过期后仍能拿来兜底。
+
+KV 免费额度是每天 10 万次读、1000 次写：每次生成最多读「节点数」个键，只有新识别出的节点才写，正常使用够用。
 
 几点限制：
 
